@@ -223,11 +223,14 @@ function render() {
   ctx.fillStyle = "#e9e7df"; ctx.fillRect(0, 0, W, H);
   if (!S.site) return;
   const sc = S.view.scale, ter = S.site.terrain;
-  // 陰影図
+  const base = drawBasemap(W, H, dpr);
+  // 陰影図 (背景地図があれば少し透かして道などを見せる)
   if (S.img && ter) {
     const [x0, y0, x1, y1] = ter.bounds;
     ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = base ? 0.7 : 1;
     ctx.drawImage(S.img, sx(x0), sy(y1), (x1 - x0) * sc, (y1 - y0) * sc);
+    ctx.globalAlpha = 1;
   }
   // 等高線 (拡大が小さいときは太線だけ)
   if (ter && ter.contours) {
@@ -349,6 +352,141 @@ function render() {
     ctx.beginPath(); ctx.arc(X, Y, 7, 0, Math.PI * 2); ctx.stroke(); ctx.fill();
   }
   drawScale(W, H);
+  if (base) {     // 地理院タイルの出典 (利用の条件)
+    const txt = `出典: 地理院タイル (${BASEMAPS[S.base].label})`;
+    ctx.font = "11px sans-serif"; const w = ctx.measureText(txt).width;
+    ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.fillRect(W - w - 10, 0, w + 10, 16);
+    ctx.fillStyle = "#333"; ctx.fillText(txt, W - w - 5, 12);
+  }
+}
+
+// ---------------------------------------------------------------- 背景地図 (地理院タイル)
+// タイル (Web メルカトル) の角を開いているデータの座標系に直し、アフィン変換で貼る。見た・保存したタイルは
+// Service Worker がキャッシュ (TILE_CACHE) に残すので、電波の無い所でも出る
+const GSI = "https://cyberjapandata.gsi.go.jp/xyz";
+const BASEMAPS = {
+  none: { label: "なし" },
+  std: { label: "標準地図", url: `${GSI}/std/{z}/{x}/{y}.png`, min: 5, max: 18 },
+  pale: { label: "淡色地図", url: `${GSI}/pale/{z}/{x}/{y}.png`, min: 5, max: 18 },
+  photo: { label: "航空写真", url: `${GSI}/seamlessphoto/{z}/{x}/{y}.jpg`, min: 2, max: 18 },
+};
+const TILE_CACHE = "forestfield-tiles";
+S.base = ls.get("basemap", "std");
+const tiles = new Map();     // url -> {img, ok}
+const lon2tx = (lon, z) => (lon + 180) / 360 * 2 ** z;
+const lat2ty = (lat, z) => (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * 2 ** z;
+const tx2lon = (x, z) => x / 2 ** z * 360 - 180;
+const ty2lat = (y, z) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / 2 ** z))) * 180 / Math.PI;
+const tileUrl = (b, z, x, y) => BASEMAPS[b].url.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+let llLocal = null;
+/** 緯度経度 -> 基準点からの m (proj4 があれば正確に、無ければ線形近似) */
+function llToLocal(lat, lon) {
+  if (!llLocal || llLocal.site !== S.siteId) {
+    let f = null;
+    try { f = makeLocal("EPSG:4326"); } catch (e) { f = null; }
+    llLocal = { site: S.siteId, f: f || (([lo, la]) => llToXY(la, lo)) };
+  }
+  return llLocal.f([lon, lat]);
+}
+function getTile(url) {
+  let t = tiles.get(url);
+  if (!t) {
+    t = { img: new Image(), ok: false, fail: false };
+    t.img.crossOrigin = "anonymous";
+    t.img.onload = () => { t.ok = true; draw(); };
+    t.img.onerror = () => { t.fail = true; };
+    t.img.src = url;
+    tiles.set(url, t);
+    if (tiles.size > 600) tiles.delete(tiles.keys().next().value);   // 古いものから捨てる
+  }
+  return t;
+}
+function drawBasemap(W, H, dpr) {
+  const B = BASEMAPS[S.base];
+  if (!B || !B.url) return false;
+  const lat0 = S.site.origin.lat;
+  // 画面の 1 px ≒ タイルの 1 px になる拡大段階
+  let z = Math.round(Math.log2(156543.034 * Math.cos(lat0 * Math.PI / 180) * S.view.scale));
+  z = Math.max(B.min, Math.min(B.max, z));
+  const corners = [[0, 0], [W, 0], [0, H], [W, H]].map(([px, py]) => xyToLL(wx(px), wy(py)));
+  const lats = corners.map((c) => c[0]), lons = corners.map((c) => c[1]);
+  let x0, x1, y0, y1;
+  for (;;) {
+    x0 = Math.floor(lon2tx(Math.min(...lons), z)); x1 = Math.floor(lon2tx(Math.max(...lons), z));
+    y0 = Math.floor(lat2ty(Math.max(...lats), z)); y1 = Math.floor(lat2ty(Math.min(...lats), z));
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) <= 64 || z <= B.min) break;
+    z--;     // 引いた表示ではタイルが多くなりすぎないように粗くする
+  }
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      // そのタイルが無ければ (読み込み中・保存していない)、粗い段階のタイルの一部を拡大して代わりにする
+      let t = null, k = 0;
+      for (; k <= 6 && z - k >= B.min; k++) {
+        const c = getTileIfReady(tileUrl(S.base, z - k, x >> k, y >> k), k === 0);
+        if (c) { t = c; break; }
+      }
+      if (!t) continue;
+      const s = 256 >> k, ox = (x - ((x >> k) << k)) * s, oy = (y - ((y >> k) << k)) * s;
+      const P = (ix, iy) => { const [lx, ly] = llToLocal(ty2lat(iy, z), tx2lon(ix, z)); return [sx(lx), sy(ly)]; };
+      const nw = P(x, y), ne = P(x + 1, y), sw = P(x, y + 1);
+      ctx.setTransform(dpr * (ne[0] - nw[0]) / 256, dpr * (ne[1] - nw[1]) / 256, dpr * (sw[0] - nw[0]) / 256,
+        dpr * (sw[1] - nw[1]) / 256, dpr * nw[0], dpr * nw[1]);
+      ctx.drawImage(t.img, ox, oy, s, s, 0, 0, 256.6, 256.6);      // 少し重ねて継ぎ目を消す
+    }
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return true;
+}
+function getTileIfReady(url, request) {
+  const t = request ? getTile(url) : tiles.get(url);     // 粗い段階は、もう読んであるものだけ使う
+  return t && t.ok ? t : null;
+}
+function renderBaseBtns() {
+  $("baseBtns").innerHTML = Object.entries(BASEMAPS).map(([k, b]) =>
+    `<button data-base="${k}" class="${k === S.base ? "on" : ""}">${b.label}</button>`).join("");
+}
+$("baseBtns").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-base]"); if (!b) return;
+  S.base = b.dataset.base; ls.set("basemap", S.base); renderBaseBtns(); draw();
+});
+
+/** 調査地 (地形の範囲 + 周り 500 m) の背景地図を、拡大段階 13〜18 まで端末に保存する */
+async function saveTiles() {
+  const B = BASEMAPS[S.base];
+  if (!B.url) { toast("背景地図を選んでから保存してください"); return; }
+  const [bx0, by0, bx1, by1] = S.site.terrain ? S.site.terrain.bounds : [-100, -100, 100, 100];
+  const m = 500, ll = [[bx0 - m, by0 - m], [bx1 + m, by1 + m]].map(([x, y]) => xyToLL(x, y));
+  const urls = [];
+  for (let z = Math.max(13, B.min); z <= B.max; z++) {
+    const xa = Math.floor(lon2tx(ll[0][1], z)), xb = Math.floor(lon2tx(ll[1][1], z));
+    const ya = Math.floor(lat2ty(ll[1][0], z)), yb = Math.floor(lat2ty(ll[0][0], z));
+    for (let x = xa; x <= xb; x++) for (let y = ya; y <= yb; y++) urls.push(tileUrl(S.base, z, x, y));
+  }
+  if (!confirm(`${B.label}のタイル ${urls.length} 枚 (数 MB) を端末に保存します。電波のある所で行ってください。`)) return;
+  const cache = await caches.open(TILE_CACHE);
+  let done = 0, fail = 0, i = 0;
+  const worker = async () => {
+    while (i < urls.length) {
+      const u = urls[i++];
+      try {
+        if (!(await cache.match(u))) {
+          const r = await fetch(u, { mode: "cors" });
+          if (r.ok) await cache.put(u, r); else fail++;
+        }
+      } catch (e) { fail++; }
+      done++;
+      if (done % 20 === 0) $("tileInfo").textContent = `保存中 ${done} / ${urls.length}`;
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);    // 地理院の負担にならないよう 4 本ずつ
+  await renderTileInfo();
+  toast(fail ? `保存しました (${urls.length - fail} 枚。${fail} 枚は取れませんでした)` : `${B.label}を保存しました (${urls.length} 枚)`);
+}
+async function renderTileInfo() {
+  try {
+    const n = (await (await caches.open(TILE_CACHE)).keys()).length;
+    $("tileInfo").textContent = n ? `端末に保存した背景地図: ${n} 枚 (見た場所も自動で保存)` : "背景地図は、見た場所だけ端末に残ります";
+  } catch (e) { $("tileInfo").textContent = ""; }
 }
 
 function drawScale(W, H) {
@@ -985,12 +1123,15 @@ $("siteList").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-site]"); if (!b) return;
   openSite(decodeURIComponent(b.dataset.site)); $("menu").hidden = true;
 });
-$("menuBtn").addEventListener("click", () => { renderSiteList(); if (S.site) renderLayerList(); $("menu").hidden = false; });
+$("menuBtn").addEventListener("click", () => {
+  renderSiteList(); renderBaseBtns(); renderTileInfo(); if (S.site) renderLayerList(); $("menu").hidden = false;
+});
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]"); if (!b) return;
   const act = b.dataset.act;
-  const needSite = ["csv", "json", "gpx", "import", "clearTrack", "deleteSite", "resetCalib", "gps", "layer"];
+  const needSite = ["csv", "json", "gpx", "import", "clearTrack", "deleteSite", "resetCalib", "gps", "layer", "saveTiles"];
   if (needSite.includes(act) && !S.site) { toast("先にデータを開いてください"); return; }
+  if (act === "saveTiles") { saveTiles(); return; }      // 進み具合をメニューに出すので閉じない
   if (act !== "open" && act !== "import") $("menu").hidden = true;
   if (act === "layer") { $("fileLayer").click(); return; }
   if (act === "closeMenu") $("menu").hidden = true;

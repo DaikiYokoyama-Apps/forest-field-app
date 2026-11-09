@@ -115,6 +115,11 @@
     <input id="mag" type="range" min="2" max="30" step="1" value="10"> <b id="magVal">10</b> 倍</label>
   <label class="mrow"><input id="showLabels" type="checkbox" checked> 拡大したら番号を表示</label>
   <hr>
+  <div class="mrow"><b>背景地図</b> <span class="sub">地理院タイル (国土地理院)</span></div>
+  <div id="baseBtns" class="chips"></div>
+  <button data-act="saveTiles">この調査地の背景地図を端末に保存 (電波の無い所用)</button>
+  <div id="tileInfo" class="sub"></div>
+  <hr>
   <button data-act="layer">ポリゴンを重ねる (shp の zip・GeoJSON・KML・GPX)</button>
   <p class="sub">座標系が違っても、開いているデータの座標系に直して重ねます</p>
   <div id="layerList"></div>
