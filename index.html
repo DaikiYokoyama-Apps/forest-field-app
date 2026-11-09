@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#2f4f3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="毎木確認">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>毎木確認</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="bar">
+  <button id="menuBtn" class="icon" aria-label="メニュー">☰</button>
+  <div class="title">
+    <div id="siteName">データ未読込</div>
+    <div id="progress" class="sub"></div>
+  </div>
+  <div id="gpsState" class="gps off" title="GPS">GPS 停止</div>
+</header>
+
+<div id="filters">
+  <div class="dbh">
+    <span>胸高直径 <b id="dbhVal">10 cm 〜 上限なし</b></span>
+    <div class="dual">
+      <div class="track"><div id="dbhFill" class="fill"></div></div>
+      <input id="dbhMin" type="range" min="0" max="115" step="1" value="10" aria-label="胸高直径の下限">
+      <input id="dbhMax" type="range" min="0" max="115" step="1" value="115" aria-label="胸高直径の上限">
+    </div>
+  </div>
+  <label class="chk"><input id="onlyTodo" type="checkbox"> 未確認のみ</label>
+</div>
+
+<main id="mapWrap">
+  <canvas id="map"></canvas>
+  <div id="cross" hidden></div>
+  <div id="empty">
+    <p><b>解析結果のデータ (.forest.json) を開いてください</b></p>
+    <p>解析アプリの「現地アプリ」タブで書き出したファイルを、スマホに送ってから選びます。</p>
+    <button class="primary" data-act="open">データを開く</button>
+  </div>
+  <div id="fab">
+    <button id="addBtn" class="round" aria-label="木を追加" title="木を追加">＋</button>
+    <button id="locBtn" class="round" aria-label="現在地" title="現在地 (もう一度で追従)">◎</button>
+  </div>
+  <div id="addBar" hidden>
+    <span>十字の位置に木を追加</span>
+    <button id="addHere" class="primary">ここに追加</button>
+    <button id="addMe">現在地に追加</button>
+    <button id="addCancel">やめる</button>
+  </div>
+  <div id="legend"></div>
+</main>
+
+<section id="sheet" hidden>
+  <div class="grip"></div>
+  <div class="head">
+    <div>
+      <div class="tid">No. <span id="tId"></span> <span id="tNew" class="tag" hidden>追加した木</span></div>
+      <div id="tInfo" class="sub"></div>
+      <div id="tDist" class="sub"></div>
+    </div>
+    <button id="sheetClose" class="icon" aria-label="閉じる">✕</button>
+  </div>
+  <div class="row two" id="absentRow">
+    <label class="absent"><input id="fAbsent" type="checkbox"> 存在しない (LiDAR の誤検出)</label>
+    <label class="done"><input id="fChecked" type="checkbox"> 確認済み</label>
+  </div>
+  <div id="details">
+    <div class="row three">
+      <label>実測胸高直径 (cm)<input id="fDbh" type="number" inputmode="decimal" step="0.1" min="0"></label>
+      <label>実測樹高 (m)<input id="fHgt" type="number" inputmode="decimal" step="0.1" min="0"></label>
+      <label>テープ番号<input id="fTag" type="text" inputmode="numeric"></label>
+    </div>
+    <div class="row">
+      <div class="lab">樹種</div>
+      <div id="spBtns" class="chips"></div>
+      <div id="spSubBox" hidden>
+        <div id="spSub" class="chips sub2"></div>
+        <input id="spName" type="text" placeholder="一覧に無い樹種名を書く">
+      </div>
+    </div>
+    <div class="row">
+      <div class="lab">階層</div>
+      <div id="strataBtns" class="chips"></div>
+    </div>
+    <div class="row">
+      <div class="lab">樹冠の位置 <span class="hint">優勢 = 林冠の上に出る … 被圧 = 林冠の下</span></div>
+      <div id="crownBtns" class="chips"></div>
+    </div>
+    <div id="flagGroups"></div>
+  </div>
+  <div class="row">
+    <div class="lab">備考</div>
+    <textarea id="fMemo" rows="2" placeholder="メモ"></textarea>
+  </div>
+  <div class="row actions">
+    <button id="calib">いまこの木の横にいる (GPS を合わせる)</button>
+    <button id="delNew" class="danger" hidden>この追加した木を消す</button>
+  </div>
+  <div id="saved" class="sub">変更は自動で保存されます</div>
+</section>
+
+<nav id="menu" hidden>
+  <div class="mhead"><b>メニュー</b><button class="icon" data-act="closeMenu">✕</button></div>
+  <button data-act="open">データを開く (.forest.json)</button>
+  <div id="siteList"></div>
+  <hr>
+  <button data-act="gps">GPS を開始 / 停止</button>
+  <button data-act="resetCalib">GPS の補正を消す</button>
+  <label class="mrow">円の大きさ (胸高直径の何倍)
+    <input id="mag" type="range" min="2" max="30" step="1" value="10"> <b id="magVal">10</b> 倍</label>
+  <label class="mrow"><input id="showLabels" type="checkbox" checked> 拡大したら番号を表示</label>
+  <hr>
+  <button data-act="layer">ポリゴンを重ねる (GeoJSON / KML)</button>
+  <div id="layerList"></div>
+  <hr>
+  <button data-act="csv">記録を書き出す (CSV)</button>
+  <button data-act="json">記録を書き出す (バックアップ JSON)</button>
+  <button data-act="gpx">GPS の軌跡を書き出す (GPX)</button>
+  <button data-act="import">バックアップ JSON を読み込む</button>
+  <hr>
+  <button data-act="clearTrack">GPS の軌跡を消す</button>
+  <button data-act="deleteSite" class="danger">このデータと記録を端末から消す</button>
+  <p class="sub">記録はこの端末の中だけに保存されます (送信しません)。こまめに書き出してください。</p>
+</nav>
+
+<input id="fileData" type="file" accept=".json,application/json" hidden>
+<input id="fileBackup" type="file" accept=".json,application/json" hidden>
+<input id="fileLayer" type="file" accept=".geojson,.json,.kml,application/json,application/vnd.google-earth.kml+xml" hidden>
+<div id="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
