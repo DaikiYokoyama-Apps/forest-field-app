@@ -30,7 +30,7 @@ button.icon { border: none; background: transparent; font-size: 22px; min-width:
 #bar #siteName { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #bar .sub { color: #d8e3da; }
 #bar button.icon { color: var(--accent-ink); }
-.gps { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: rgba(255,255,255,.15); white-space: nowrap; }
+.gps { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: rgba(255,255,255,.15); white-space: nowrap; cursor: pointer; }
 .gps.on { background: #1a6fd6; }
 .gps.weak { background: #a05a00; }
 
@@ -117,4 +117,4 @@ input[type=text], input[type=number], textarea { width: 100%; font: inherit; fon
 #siteList button { width: 100%; text-align: left; margin-top: 4px; }
 #siteList button.cur { border-color: var(--accent); border-width: 2px; }
 #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #222; color: #fff; padding: 10px 14px;
-  border-radius: 10px; z-index: 30; max-width: 90vw; font-size: 14px; }
+  border-radius: 10px; z-index: 30; max-width: 90vw; font-size: 14px; white-space: pre-line; }

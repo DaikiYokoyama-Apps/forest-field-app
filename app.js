@@ -284,14 +284,15 @@ function render() {
       }
     }
   }
-  // GPS の軌跡
-  if (S.track.length > 1) {
-    ctx.strokeStyle = "rgba(26,111,214,.55)"; ctx.lineWidth = 2; ctx.beginPath();
-    S.track.forEach((p, i) => {
-      const [x, y] = llToXY(p.lat, p.lon), X = sx(x + S.calib.dx), Y = sy(y + S.calib.dy);
-      i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
-    });
-    ctx.stroke();
+  // GPS の軌跡 (通った道)。白で縁取りした青い線。間が空いたところはつながない
+  const [segs] = trackSegments();
+  if (segs.length) {
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    for (const [w, c] of [[6, "rgba(255,255,255,.9)"], [3, "#1a6fd6"]]) {
+      ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath();
+      for (const s of segs) { ctx.moveTo(sx(s[0][0]), sy(s[0][1])); for (const q of s.slice(1)) ctx.lineTo(sx(q[0]), sy(q[1])); }
+      ctx.stroke();
+    }
   }
   // 木: 円の面積 = 胸高断面積 (半径は胸高直径に比例、mag 倍に拡大)
   const showId = S.labels && sc >= 14;
@@ -595,12 +596,22 @@ function startGps() {
     S.gps = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: p.timestamp };
     onGps(true);
   }, (err) => {
-    toast(err.code === 1 ? "位置情報の利用が許可されていません (ブラウザの設定で許可してください)" : `GPS: ${err.message}`, 4000);
+    // 電波が弱いときのタイムアウト (code 3) は測位を続けるので知らせない
+    if (err.code === 1) {
+      toast("位置情報の利用が許可されていません。ブラウザ (iPhone は 設定 > プライバシー > 位置情報サービス) で許可してください", 6000);
+      stopGps();
+    } else if (err.code === 2) toast("現在地が取れません (屋内・谷底など)。測位を続けます", 3000);
     setGpsState();
   }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
-  if ("wakeLock" in navigator) navigator.wakeLock.request("screen").then((w) => { S.wake = w; }).catch(() => {});
+  keepAwake();
   setGpsState();
 }
+// 画面が消えると端末が GPS を止めるので、GPS 中は画面を点けたままにする。アプリから離れると解除されるので戻ったら取り直す
+function keepAwake() {
+  if (!("wakeLock" in navigator) || S.watch === null || document.visibilityState !== "visible") return;
+  navigator.wakeLock.request("screen").then((w) => { S.wake = w; }).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
 function stopGps() {
   if (S.watch !== null) navigator.geolocation.clearWatch(S.watch);
   S.watch = null; S.gps = null; S.me = null; setFollow(false);
@@ -621,9 +632,11 @@ function onGps(fresh) {
   if (S.follow) { S.view.cx = S.me[0]; S.view.cy = S.me[1]; }
   setGpsState(); updateDist(); draw();
 }
+const TRACK_MAX_ACC = 50;     // これより誤差の大きい点は軌跡に残さない (m)
+const TRACK_GAP_MS = 120000;  // これより間が空いたら線をつながない (アプリから離れていた・GPS を止めていた)
 function recordTrack() {
   const g = S.gps, last = S.track[S.track.length - 1];
-  if (g.acc > 50) return;
+  if (g.acc > TRACK_MAX_ACC) { S.skipped = (S.skipped || 0) + 1; return; }
   if (last) {
     const [x0, y0] = llToXY(last.lat, last.lon), [x1, y1] = llToXY(g.lat, g.lon);
     if (Math.hypot(x1 - x0, y1 - y0) < 2 && g.t - last.t < 15000) return;
@@ -631,6 +644,36 @@ function recordTrack() {
   const p = { site: S.siteId, t: g.t, lat: g.lat, lon: g.lon, acc: g.acc };
   S.track.push(p); DB.put("tracks", p).catch(() => {});
 }
+/** 軌跡を、間の空いたところで切った線のリストにする (基準点からの m)。長さ (m) も返す */
+function trackSegments() {
+  const segs = []; let cur = [], len = 0, prev = null;
+  for (const p of S.track) {
+    const [x, y] = llToXY(p.lat, p.lon), q = [x + S.calib.dx, y + S.calib.dy, p.t];
+    if (prev && q[2] - prev[2] > TRACK_GAP_MS) { if (cur.length > 1) segs.push(cur); cur = []; }
+    else if (prev) len += Math.hypot(q[0] - prev[0], q[1] - prev[1]);
+    cur.push(q); prev = q;
+  }
+  if (cur.length > 1) segs.push(cur);
+  return [segs, len];
+}
+// GPS の表示をタップすると、測位と軌跡の記録の様子を出す (調査地から離れた場所での動作確認にも)
+$("gpsState").addEventListener("click", () => {
+  if (!S.site) return;
+  const [segs, len] = trackSegments(), last = S.track[S.track.length - 1];
+  const lines = [];
+  if (S.watch === null) lines.push("GPS は止まっています (右下の ◎ で開始)");
+  else if (!S.gps) lines.push("測位中… (屋外で数十秒かかることがあります)");
+  else {
+    const d = Math.hypot(...llToXY(S.gps.lat, S.gps.lon));
+    lines.push(`現在地 ${S.gps.lat.toFixed(6)}, ${S.gps.lon.toFixed(6)} (誤差 ±${Math.round(S.gps.acc)} m)`,
+      `調査地の中心から ${d < 1000 ? `${Math.round(d)} m` : `${(d / 1000).toFixed(1)} km`}`);
+  }
+  lines.push(`軌跡: ${S.track.length} 点・${len < 1000 ? `${Math.round(len)} m` : `${(len / 1000).toFixed(2)} km`}` +
+    (last ? `・最後の記録 ${new Date(last.t).toLocaleTimeString("ja-JP")}` : ""));
+  if (S.skipped) lines.push(`誤差 ${TRACK_MAX_ACC} m を超えて残さなかった点: ${S.skipped}`);
+  lines.push("画面を消す・別のアプリに切り替えると記録が止まります");
+  toast(lines.join("\n"), 8000);
+});
 $("locBtn").addEventListener("click", () => {
   if (!S.site) return;
   if (S.watch === null) { startGps(); setFollow(true); toast("GPS を開始しました (もう一度押すと現在地を追従)"); return; }
@@ -733,13 +776,44 @@ $("layerList").addEventListener("click", async (e) => {
   await DB.put("sites", S.site); buildLayers(); renderLayerList(); draw();
 });
 
-function makeLocal() {
-  // 緯度経度 (GeoJSON・KML の標準) か、データと同じ平面直角座標 (m) かを値の大きさで見分ける
+// ---- 座標系の変換: 重ねるファイルの座標系 (src) から、開いているデータの座標系の基準点からの m へ
+const siteCode = () => `EPSG:${S.site.crs_epsg}`;
+const hasProj = () => typeof proj4 === "function" && !!proj4.defs(siteCode());
+/** src ("EPSG:xxxx" か proj4 に渡せる定義) -> 基準点からの m に直す関数 */
+function makeLocal(src) {
   const o = S.site.origin;
-  return ([a, b]) => {
-    if (Math.abs(a) <= 180 && Math.abs(b) <= 90) return llToXY(b, a);
-    return [a - o.x, b - o.y];
-  };
+  if (!src || src === siteCode()) return ([a, b]) => [a - o.x, b - o.y];
+  if (hasProj()) {
+    const tr = proj4(src, siteCode());
+    return (c) => { const [x, y] = tr.forward([c[0], c[1]]); return [x - o.x, y - o.y]; };
+  }
+  if (src === "EPSG:4326") return ([lon, lat]) => llToXY(lat, lon);    // 変換の定義が無いときは基準点での線形近似
+  throw new Error(`座標系 ${src} を変換できません`);
+}
+function isLonLat(c) { return Math.abs(c[0]) <= 180 && Math.abs(c[1]) <= 90; }
+/** 座標系の情報が無い平面座標: 調査地のそばに来る座標系を探す (同じ座標系を優先)。戻り値: [code, 調査地からの距離 m] */
+function guessCrs(c) {
+  const o = S.site.origin;
+  const dist = (code) => { try { const [x, y] = makeLocal(code)(c); return Math.hypot(x, y); } catch (e) { return Infinity; } };
+  const own = dist(siteCode());
+  if (own < 20000 || !hasProj()) return [siteCode(), own];
+  let best = [null, Infinity];
+  for (const code of Object.keys(CRS_JP)) {
+    if (!/\+proj=(tmerc|utm)/.test(CRS_JP[code][1])) continue;
+    const d = dist(code);
+    if (d < best[1]) best = [code, d];
+  }
+  return best;
+}
+const crsName = (code) => (typeof CRS_JP !== "undefined" && CRS_JP[code] ? `${CRS_JP[code][0]} (${code})` : code);
+/** .prj (WKT) -> proj4 に渡す定義。旧日本測地系で TOWGS84 が無ければ、同梱の定義と同じ 3 パラメータを足す */
+function prjToDef(wkt) {
+  if (!wkt) return null;
+  if (/tokyo/i.test(wkt) && !/TOWGS84/i.test(wkt)) {
+    const tw = (CRS_JP["EPSG:4301"][1].match(/\+towgs84=([-\d.,]+)/) || [])[1];
+    if (tw) wkt = wkt.replace(/(SPHEROID\[[^\]]*\])/i, `$1,TOWGS84[${tw}]`);
+  }
+  return wkt;
 }
 function featureFrom(name, polys, lines, points, toLocal) {
   const flat = (cs) => cs.flatMap((c) => toLocal(c).map((v) => +v.toFixed(2)));
@@ -785,31 +859,119 @@ function parseKML(text, toLocal) {
     return featureFrom(nm ? nm.textContent.trim() : "", polys, lines, points, toLocal);
   });
 }
-async function loadLayerFile(file) {
-  const text = await file.text(), toLocal = makeLocal();
-  let feats;
-  try {
-    if (/\.kml$/i.test(file.name) || /^\s*<\?xml|<kml/i.test(text.slice(0, 200))) feats = parseKML(text, toLocal);
-    else {
-      const d = JSON.parse(text);
-      const crs = d.crs && d.crs.properties && String(d.crs.properties.name || "");
-      const m = crs && crs.match(/EPSG:{1,2}(\d+)/);
-      if (m && !["4326", "6668", "4612", String(S.site.crs_epsg)].includes(m[1])) {
-        toast(`座標系 EPSG:${m[1]} のファイルは読めません。緯度経度か EPSG:${S.site.crs_epsg} で書き出すか、解析アプリで読み込んでください`, 6000);
-        return;
-      }
-      feats = parseGeoJSON(d, toLocal);
+function parseGPX(text, toLocal) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  const pt = (e) => [+e.getAttribute("lon"), +e.getAttribute("lat")];
+  const out = [];
+  for (const trk of [...doc.getElementsByTagName("trk"), ...doc.getElementsByTagName("rte")]) {
+    const nm = trk.getElementsByTagName("name")[0];
+    const segs = [...trk.getElementsByTagName("trkseg")];
+    const lines = segs.length ? segs.map((s) => [...s.getElementsByTagName("trkpt")].map(pt)) : [[...trk.getElementsByTagName("rtept")].map(pt)];
+    out.push(featureFrom(nm ? nm.textContent.trim() : "", [], lines.filter((l) => l.length > 1), [], toLocal));
+  }
+  for (const w of doc.getElementsByTagName("wpt")) {
+    const nm = w.getElementsByTagName("name")[0];
+    out.push(featureFrom(nm ? nm.textContent.trim() : "", [], [], [pt(w)], toLocal));
+  }
+  return out;
+}
+
+/** zip の中身を取り出す (shp・dbf・prj・cpg だけ)。圧縮は deflate を DecompressionStream で戻す */
+async function unzip(buf) {
+  const v = new DataView(buf), out = {};
+  let e = buf.byteLength - 22;
+  while (e >= 0 && v.getUint32(e, true) !== 0x06054b50) e--;           // 中央ディレクトリの終わり
+  if (e < 0) throw new Error("zip ではありません");
+  let p = v.getUint32(e + 16, true);
+  const n = v.getUint16(e + 10, true);
+  for (let i = 0; i < n; i++) {
+    const method = v.getUint16(p + 10, true), size = v.getUint32(p + 20, true);
+    const nl = v.getUint16(p + 28, true), xl = v.getUint16(p + 30, true), cl = v.getUint16(p + 32, true);
+    const off = v.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(new Uint8Array(buf, p + 46, nl));
+    p += 46 + nl + xl + cl;
+    if (!/\.(shp|dbf|prj|cpg)$/i.test(name) || /__MACOSX/.test(name)) continue;
+    const lnl = v.getUint16(off + 26, true), lxl = v.getUint16(off + 28, true);
+    const data = new Uint8Array(buf, off + 30 + lnl + lxl, size);
+    let raw;
+    if (method === 0) raw = data.slice().buffer;
+    else if (method === 8) raw = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+    else throw new Error("この圧縮形式の zip は読めません");
+    out[name] = raw;
+  }
+  return out;
+}
+/** shp の zip -> 地物。座標系は .prj から (無ければ調査地のそばに来るものを探す) */
+async function parseShpZip(buf) {
+  const files = await unzip(buf), names = Object.keys(files);
+  const shps = names.filter((n) => /\.shp$/i.test(n));
+  if (!shps.length) throw new Error("zip の中に .shp がありません");
+  const feats = [], notes = [];
+  for (const s of shps) {
+    const base = s.slice(0, -4), get = (ext) => names.find((n) => n.toLowerCase() === (base + ext).toLowerCase());
+    const prj = get(".prj") ? new TextDecoder().decode(files[get(".prj")]) : "";
+    const cpg = get(".cpg") ? new TextDecoder().decode(files[get(".cpg")]).trim() : "";
+    const geoms = shp.parseShp(files[s]);
+    let props = geoms.map(() => ({}));
+    if (get(".dbf")) {
+      // 日本の shp は .cpg が無いと Shift_JIS のことが多い。UTF-8 で読めなければ Shift_JIS で読み直す
+      props = shp.parseDbf(files[get(".dbf")], cpg || "utf-8");
+      if (!cpg && JSON.stringify(props).includes("�")) props = shp.parseDbf(files[get(".dbf")], "shift_jis");
     }
-  } catch (e) { toast("ポリゴンのファイルとして読めませんでした (GeoJSON・KML に対応)"); return; }
+    const gj = shp.combine([geoms, props]);
+    const first = firstCoord(gj);
+    let src;
+    if (prj) src = prjToDef(prj);
+    else if (first && isLonLat(first)) src = "EPSG:4326";
+    else { const [code] = guessCrs(first); src = code; notes.push(`${s} に .prj が無いため ${crsName(code)} とみなしました`); }
+    feats.push(...parseGeoJSON(gj, makeLocal(src)));
+  }
+  return [feats, notes];
+}
+function firstCoord(gj) {
+  const fs = gj.type === "FeatureCollection" ? gj.features : [gj];
+  for (const f of fs) {
+    let c = (f.geometry || f).coordinates;
+    while (Array.isArray(c) && Array.isArray(c[0])) c = c[0];
+    if (Array.isArray(c) && c.length >= 2) return c;
+  }
+  return null;
+}
+
+async function loadLayerFile(file) {
+  const name = file.name.replace(/\.[^.]+$/, "");
+  let feats, notes = [];
+  try {
+    if (/\.zip$/i.test(file.name)) [feats, notes] = await parseShpZip(await file.arrayBuffer());
+    else {
+      const text = await file.text();
+      if (/\.gpx$/i.test(file.name) || /<gpx/i.test(text.slice(0, 500))) feats = parseGPX(text, makeLocal("EPSG:4326"));
+      else if (/\.kml$/i.test(file.name) || /^\s*<\?xml|<kml/i.test(text.slice(0, 200))) feats = parseKML(text, makeLocal("EPSG:4326"));
+      else {
+        // GeoJSON: crs があればそれ、無ければ緯度経度 (標準) か、調査地のそばに来る平面直角座標
+        const d = JSON.parse(text);
+        const crs = d.crs && d.crs.properties && String(d.crs.properties.name || "");
+        const m = crs && crs.match(/EPSG:{1,2}(\d+)/), first = firstCoord(d);
+        let src;
+        if (m) src = m[1] === "4326" || /CRS84/i.test(crs) ? "EPSG:4326" : `EPSG:${m[1]}`;
+        else if (/CRS84/i.test(crs) || (first && isLonLat(first))) src = "EPSG:4326";
+        else { const [code] = guessCrs(first); src = code; notes.push(`座標系の情報が無いため ${crsName(code)} とみなしました`); }
+        if (src !== "EPSG:4326" && hasProj() && !proj4.defs(src)) throw new Error(`座標系 ${src} は対応していません`);
+        if (src !== siteCode()) notes.push(`${crsName(src)} から ${crsName(siteCode())} に変換しました`);
+        feats = parseGeoJSON(d, makeLocal(src));
+      }
+    }
+  } catch (e) {
+    toast(`読めませんでした: ${e.message || e} (shp の zip・GeoJSON・KML・GPX に対応)`, 6000); return;
+  }
   feats = feats.filter((f) => f.rings.length || f.lines.length || f.points.length);
   if (!feats.length) { toast("ポリゴン・線・点が見つかりませんでした"); return; }
   // 調査地から遠すぎるもの (座標系の取り違え) は読まない
   const far = feats.every((f) => f.label && Math.hypot(f.label[0], f.label[1]) > 20000);
   if (far) { toast("調査地から 20 km 以上離れています。座標系が違う可能性があります", 6000); return; }
-  const name = file.name.replace(/\.[^.]+$/, "");
   S.site.userLayers = [...(S.site.userLayers || []).filter((l) => l.name !== name), { name, features: feats }];
   await DB.put("sites", S.site); buildLayers(); renderLayerList(); draw();
-  toast(`${name} を重ねました (${feats.length} 件)`);
+  toast([`${name} を重ねました (${feats.length} 件)`, ...notes].join("\n"), notes.length ? 6000 : 2500);
 }
 $("fileLayer").addEventListener("change", (e) => { const f = e.target.files[0]; if (f) loadLayerFile(f); e.target.value = ""; });
 

@@ -1,6 +1,7 @@
 /* 山の中 (電波なし) でも開けるように、アプリの本体をキャッシュする。データと記録は IndexedDB にある。 */
-const CACHE = "forestfield-v2";
-const FILES = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png"];
+const CACHE = "forestfield-v3";
+const FILES = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+  "crs_jp.js", "vendor/proj4.js", "vendor/shp.min.js"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

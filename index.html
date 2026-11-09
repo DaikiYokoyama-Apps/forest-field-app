@@ -115,7 +115,8 @@
     <input id="mag" type="range" min="2" max="30" step="1" value="10"> <b id="magVal">10</b> 倍</label>
   <label class="mrow"><input id="showLabels" type="checkbox" checked> 拡大したら番号を表示</label>
   <hr>
-  <button data-act="layer">ポリゴンを重ねる (GeoJSON / KML)</button>
+  <button data-act="layer">ポリゴンを重ねる (shp の zip・GeoJSON・KML・GPX)</button>
+  <p class="sub">座標系が違っても、開いているデータの座標系に直して重ねます</p>
   <div id="layerList"></div>
   <hr>
   <button data-act="csv">記録を書き出す (CSV)</button>
@@ -130,8 +131,11 @@
 
 <input id="fileData" type="file" accept=".json,application/json" hidden>
 <input id="fileBackup" type="file" accept=".json,application/json" hidden>
-<input id="fileLayer" type="file" accept=".geojson,.json,.kml,application/json,application/vnd.google-earth.kml+xml" hidden>
+<input id="fileLayer" type="file" accept=".zip,.geojson,.json,.kml,.gpx,application/zip,application/json,application/vnd.google-earth.kml+xml,application/gpx+xml" hidden>
 <div id="toast" hidden></div>
+<script src="vendor/proj4.js"></script>
+<script src="crs_jp.js"></script>
+<script src="vendor/shp.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
