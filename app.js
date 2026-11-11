@@ -14,7 +14,9 @@ const SP_NAMES = {   // 近畿の山地でよく出る樹種 (一覧に無けれ
 };
 // 解析の樹種 (林相区分図・樹種区分のメッシュ = 林分単位の推定) -> 区分
 const SP_FROM_ANALYSIS = { "スギ": "スギ", "ヒノキ": "ヒノキ", "アカマツ": "アカマツ", "マツ": "アカマツ", "クロマツ": "その他針葉樹",
-  "広葉樹": "その他広葉樹", "広葉樹Ⅱ": "その他広葉樹" };
+  "広葉樹": "その他広葉樹", "広葉樹Ⅱ": "その他広葉樹", "針葉樹": "その他針葉樹" };
+// まだ現地で記録していない木は、解析の候補 (針葉樹・広葉樹) で塗る
+const CAND_COLORS = { "針葉樹 (候補)": "#2f7d4f", "広葉樹 (候補)": "#d98c00" };
 const UNKNOWN_COLOR = "#8a8a8a";
 const FLAG_COLORS = { bite: "#e53935", nara: "#6d4c41", other: "#222" };
 // 記録する項目 (毎木調査と、その後の解析 = 検出の検証・樹高曲線・材積・iLand で使うもの)。
@@ -78,7 +80,7 @@ const ls = {
 const S = {
   site: null, siteId: null, recs: new Map(), trees: [], img: null,
   view: { cx: 0, cy: 0, scale: 4 }, sel: null,
-  dbhMin: 10, dbhMax: Infinity, onlyTodo: false, layers: [], mag: ls.get("mag", 10), labels: ls.get("labels", true),
+  dbhMin: 10, dbhMax: Infinity, onlyTodo: false, onlySpCheck: false, layers: [], mag: ls.get("mag", 10), labels: ls.get("labels", true),
   gps: null, watch: null, follow: false, me: null, acc: null, track: [], calib: { dx: 0, dy: 0 },
   addMode: false, wake: null,
 };
@@ -160,7 +162,8 @@ function rec(id) { return S.recs.get(id) || { key: `${S.siteId}|${id}`, site: S.
 function treeSp(t) {
   const r = S.recs.get(t.id);
   if (r && r.sp) return normSp(r).sp;
-  return SP_FROM_ANALYSIS[t.sp] || "";
+  if (t.sp === "針葉樹" || t.sp === "広葉樹") return `${t.sp} (候補)`;
+  return SP_FROM_ANALYSIS[t.sp] || "";      // 前の版のデータ (樹種名が入っている)
 }
 /** 前の版の記録 (広葉樹・その他 + spOther) を今の区分に読み替える */
 function normSp(r) {
@@ -171,7 +174,7 @@ function spLabel(r) {
   const { sp, name } = normSp(r);
   return name ? name : sp;
 }
-function spColor(s) { return SP_COLORS[s] || UNKNOWN_COLOR; }
+function spColor(s) { return SP_COLORS[s] || CAND_COLORS[s] || UNKNOWN_COLOR; }
 
 async function saveRec(r) {
   r.updated = new Date().toISOString();
@@ -195,6 +198,7 @@ function visible(t) {
   const d = r.dbh || t.dbh;      // 実測があれば実測で絞る。胸高直径の無い追加木は常に出す
   if (d != null && (d < S.dbhMin || d > S.dbhMax)) return false;
   if (S.onlyTodo && r.checked) return false;
+  if (S.onlySpCheck && !(t.spc === "低" && !r.sp)) return false;     // 樹種が要確認で、まだ記録していない木
   return true;
 }
 function dbhText() {
@@ -331,6 +335,13 @@ function render() {
       ctx.beginPath(); ctx.arc(mx, Y - R * 0.75, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); mx += 9;
     }
     if (r.memo) { ctx.fillStyle = "#111"; ctx.font = "bold 11px sans-serif"; ctx.fillText("✎", X - R - 9, Y - R * 0.6); }
+    if (t.spc === "低" && !r.sp) {     // 樹種の候補が要確認 (現地で樹種を記録すると消える)
+      const q = Math.max(6, Math.min(9, R * 0.5));
+      ctx.fillStyle = "#ef6c00"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(X - R * 0.75, Y - R * 0.75, q, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.font = `bold ${Math.round(q * 1.5)}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("?", X - R * 0.75, Y - R * 0.75 + 0.5); ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    }
     if (showId) {
       ctx.fillStyle = "#111"; ctx.font = "11px sans-serif"; ctx.textAlign = "center";
       ctx.fillText(t.id, X, Y + R + 11); ctx.textAlign = "left";
@@ -501,11 +512,11 @@ function drawScale(W, H) {
 
 function renderLegend() {
   const used = new Set(S.trees.map(treeSp));
-  const sp = SP_CATS.filter((s) => used.has(s));
-  if ([...used].some((s) => !SP_COLORS[s])) sp.push("不明");
+  const sp = [...Object.keys(CAND_COLORS), ...SP_CATS].filter((s) => used.has(s));
+  if ([...used].some((s) => !SP_COLORS[s] && !CAND_COLORS[s])) sp.push("不明");
   $("legend").innerHTML = sp.map((s) => `<div><i style="background:${spColor(s)}"></i>${s}</div>`).join("") +
     `<div><i style="background:${FLAG_COLORS.bite}"></i>食痕</div><div><i style="background:${FLAG_COLORS.nara}"></i>ナラ枯れ</div>` +
-    `<div><i style="background:${FLAG_COLORS.other}"></i>他の記録</div><div>✕ 枯死・倒木</div><div>⊘ 存在しない</div><div>太枠 = 確認済み</div>`;
+    `<div><i style="background:${FLAG_COLORS.other}"></i>他の記録</div><div>✕ 枯死・倒木</div><div>⊘ 存在しない</div><div><i style="background:#ef6c00"></i>? 候補が要確認</div><div>太枠 = 確認済み</div>`;
 }
 
 // ---------------------------------------------------------------- 操作 (ドラッグ・ピンチ・タップ)
@@ -582,10 +593,14 @@ function openSheet(t) {
   const r = rec(t.id);
   $("tId").textContent = t.id;
   $("tNew").hidden = !t.added; $("delNew").hidden = !t.added;
-  const src = S.site.species_source ? ` (${S.site.species_source})` : "";
   $("tInfo").textContent = t.added ? "現地で追加した木" :
-    `解析: 胸高直径 ${t.dbh ?? "-"} cm ・ 樹高 ${t.h ?? "-"} m ・ 樹種 ${t.sp || "不明"}${src}` +
+    `解析: 胸高直径 ${t.dbh ?? "-"} cm ・ 樹高 ${t.h ?? "-"} m` +
     (t.conf != null && t.conf < 0.8 ? ` ・ 幹の確度 ${t.conf} (要確認)` : "");
+  // 樹種の候補 (解析が幹の形と航空レーザから付けたもの)。確からしさ 低 = 現地で要確認
+  const src = !t.spb && S.site.species_source ? ` (${S.site.species_source})` : "";
+  $("tSp").innerHTML = t.added ? "" :
+    `解析の候補 <b>${t.sp || "不明"}</b>${src}` + (t.spc ? ` ・ 確からしさ <b class="${t.spc === "低" ? "warn" : ""}">${t.spc}${t.spc === "低" ? " (要確認)" : ""}</b>` : "") +
+    (t.spb ? `<br><span class="hint">${t.spb}</span>` : "");
   showSp(normSp(r));
   document.querySelectorAll("#strataBtns button").forEach((b) => b.classList.toggle("on", b.dataset.stratum === (r.stratum || "")));
   document.querySelectorAll("#crownBtns button").forEach((b) => b.classList.toggle("on", b.dataset.crown === (r.crown || "")));
@@ -1186,6 +1201,7 @@ function setDbhScale() {
 $("dbhMin").addEventListener("input", onDbhRange);
 $("dbhMax").addEventListener("input", onDbhRange);
 $("onlyTodo").addEventListener("change", () => { S.onlyTodo = $("onlyTodo").checked; updateProgress(); draw(); });
+$("onlySpCheck").addEventListener("change", () => { S.onlySpCheck = $("onlySpCheck").checked; updateProgress(); draw(); });
 window.addEventListener("resize", draw);
 
 // ---------------------------------------------------------------- 起動

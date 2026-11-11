@@ -50,6 +50,8 @@ button.icon { border: none; background: transparent; font-size: 22px; min-width:
   border-radius: 50%; background: #fff; border: 3px solid var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.3); cursor: pointer; }
 .dual input[type=range]::-moz-range-thumb { pointer-events: auto; width: 20px; height: 20px; border-radius: 50%; background: #fff;
   border: 3px solid var(--accent); box-shadow: 0 1px 3px rgba(0,0,0,.3); cursor: pointer; }
+.chks { display: flex; flex-direction: column; gap: 2px; }
+.warn { color: #c25400; }
 #filters .chk { font-size: 14px; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
 input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
 

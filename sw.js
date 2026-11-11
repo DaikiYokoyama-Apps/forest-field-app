@@ -1,5 +1,5 @@
 /* 山の中 (電波なし) でも開けるように、アプリの本体と背景地図のタイルをキャッシュする。データと記録は IndexedDB にある。 */
-const CACHE = "forestfield-v4";
+const CACHE = "forestfield-v6";
 const TILE_CACHE = "forestfield-tiles";      // 背景地図 (地理院タイル)。アプリの版が変わっても消さない
 const FILES = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "crs_jp.js", "vendor/proj4.js", "vendor/shp.min.js"];

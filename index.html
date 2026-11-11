@@ -31,7 +31,10 @@
       <input id="dbhMax" type="range" min="0" max="115" step="1" value="115" aria-label="胸高直径の上限">
     </div>
   </div>
-  <label class="chk"><input id="onlyTodo" type="checkbox"> 未確認のみ</label>
+  <div class="chks">
+    <label class="chk"><input id="onlyTodo" type="checkbox"> 未確認のみ</label>
+    <label class="chk"><input id="onlySpCheck" type="checkbox"> 候補が要確認のみ</label>
+  </div>
 </div>
 
 <main id="mapWrap">
@@ -61,6 +64,7 @@
     <div>
       <div class="tid">No. <span id="tId"></span> <span id="tNew" class="tag" hidden>追加した木</span></div>
       <div id="tInfo" class="sub"></div>
+      <div id="tSp" class="sub"></div>
       <div id="tDist" class="sub"></div>
     </div>
     <button id="sheetClose" class="icon" aria-label="閉じる">✕</button>
